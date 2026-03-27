@@ -22,7 +22,7 @@ struct AssemblyAIASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "model",
-            label: L("Streaming Model (不支持中文)", "Streaming Model (No Chinese support)"),
+            label: L("Streaming Model", "Streaming Model"),
             placeholder: defaultModel,
             isSecure: false,
             isOptional: false,

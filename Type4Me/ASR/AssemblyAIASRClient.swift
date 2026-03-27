@@ -145,7 +145,14 @@ actor AssemblyAIASRClient: SpeechRecognizer {
                 do {
                     guard let task = await self.webSocketTask else { break }
                     let message = try await task.receive()
-                    await self.handleMessage(message)
+                    let action = await self.handleMessage(message)
+                    switch action {
+                    case .none: break
+                    case .gateReady:
+                        await self.connectionGate?.markReady()
+                    case .gateFailed(let error):
+                        await self.connectionGate?.markFailure(error)
+                    }
                 } catch {
                     if Task.isCancelled {
                         break
@@ -177,7 +184,15 @@ actor AssemblyAIASRClient: SpeechRecognizer {
         }
     }
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) async {
+    private enum MessageAction {
+        case none
+        case gateReady
+        case gateFailed(Error)
+    }
+
+    /// Parse and handle a WebSocket message synchronously (no suspension points).
+    /// Returns an action for the receive loop to handle asynchronously.
+    private func handleMessage(_ message: URLSessionWebSocketTask.Message) -> MessageAction {
         do {
             let data: Data
             switch message {
@@ -186,33 +201,30 @@ actor AssemblyAIASRClient: SpeechRecognizer {
             case .string(let text):
                 data = Data(text.utf8)
             @unknown default:
-                return
+                return .none
             }
 
             guard let event = try AssemblyAIProtocol.parseServerEvent(from: data) else {
-                return
+                return .none
             }
 
             switch event {
             case .begin:
-                if let gate = connectionGate {
-                    await gate.markReady()
-                }
+                return .gateReady
 
             case .turn(let update):
                 applyTurnUpdate(update)
+                return .none
 
             case .termination:
-                emitEvent(.completed)
+                return .none
 
             case .speechStarted:
-                break
+                return .none
             }
         } catch {
-            if let gate = connectionGate {
-                await gate.markFailure(error)
-            }
             emitEvent(.error(error))
+            return .gateFailed(error)
         }
     }
 
@@ -406,23 +418,5 @@ private final class AssemblyAIWebSocketDelegate: NSObject, URLSessionWebSocketDe
     }
 }
 
-private extension Character {
-    var isClosingPunctuation: Bool {
-        ",.!?;:)]}\"'".contains(self)
-    }
-
-    var isOpeningPunctuation: Bool {
-        "([{/\"'".contains(self)
-    }
-
-    var isCJKUnifiedIdeograph: Bool {
-        unicodeScalars.contains { scalar in
-            switch scalar.value {
-            case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
-                return true
-            default:
-                return false
-            }
-        }
-    }
-}
+// Character extensions (isClosingPunctuation, isCJKUnifiedIdeograph, etc.)
+// are defined in AssemblyAIProtocol.swift
