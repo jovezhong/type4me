@@ -1,6 +1,11 @@
 {
-  "latest": "1.2.1",
+  "latest": "1.2.2",
   "releases": [
+    {
+      "version": "1.2.2",
+      "date": "2026-03-27",
+      "notes": "- 新增 AssemblyAI 流式语音识别引擎\n- 修复 README 中本地模型下载链接断行和视频标签问题"
+    },
     {
       "version": "1.2.1",
       "date": "2026-03-26",
