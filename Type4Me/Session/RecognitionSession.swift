@@ -196,10 +196,54 @@ actor RecognitionSession {
             boostingTableID: biasSettings.boostingTableID
         )
 
-        // Capture prompt context (selected text + clipboard) before connect(),
-        // because cloud ASR connect involves network round-trips that can take
-        // hundreds of milliseconds, by which time the user's selection may be gone.
+        // Capture prompt context while the user's selection is still active.
         promptContext = await PromptContext.capture()
+
+        // Reset text state and clean up previous pipeline
+        currentTranscript = .empty
+        await finishAudioChunkPipeline(timeout: .milliseconds(100))
+
+        // ── Phase 1: Start recording immediately (before ASR connects) ──
+        // Audio chunks are buffered while WebSocket handshake is in progress.
+        // This eliminates the ~1s perceived latency from connect().
+
+        let audioBuffer = AudioChunkBuffer()
+
+        let levelHandler = self.onAudioLevel
+        audioEngine.onAudioLevel = { level in
+            levelHandler?(level)
+        }
+
+        audioEngine.onAudioChunk = { [weak self] data in
+            guard self != nil else { return }
+            audioBuffer.append(data)
+        }
+
+        do {
+            try audioEngine.start()
+            NSLog("[Session] Audio engine started OK")
+            DebugFileLogger.log("audio engine started OK")
+        } catch {
+            NSLog("[Session] Audio engine start FAILED: %@", String(describing: error))
+            DebugFileLogger.log("audio engine start failed: \(String(describing: error))")
+            SoundFeedback.playError()
+            await client.disconnect()
+            self.asrClient = nil
+            state = .idle
+            onASREvent?(.error(error))
+            return
+        }
+
+        state = .recording
+        markReadyIfNeeded()
+        DebugFileLogger.log("session entered recording state (buffering, ASR connecting)")
+
+        // Lower system volume during recording if enabled
+        if UserDefaults.standard.bool(forKey: "tf_lowerVolumeOnRecord") {
+            SystemVolumeManager.lower(to: 0.2)
+        }
+
+        // ── Phase 2: Connect ASR (audio is already recording) ──
 
         do {
             try await client.connect(config: config, options: requestOptions)
@@ -213,19 +257,29 @@ actor RecognitionSession {
             NSLog("[Session] ASR connect FAILED: %@", String(describing: error))
             DebugFileLogger.log("ASR connect failed: \(String(describing: error))")
             SoundFeedback.playError()
+            audioEngine.stop()
+            audioEngine.onAudioChunk = nil
+            audioEngine.onAudioLevel = nil
             await client.disconnect()
             self.asrClient = nil
             state = .idle
+            hasEmittedReadyForCurrentSession = false
             onASREvent?(.error(error))
             onASREvent?(.completed)
+            SystemVolumeManager.restore()
             return
         }
 
-        // Reset text state
-        currentTranscript = .empty
-        await finishAudioChunkPipeline(timeout: .milliseconds(100))
+        // Bail out if user already stopped while we were connecting
+        guard state == .recording else {
+            DebugFileLogger.log("session state changed during connect, aborting")
+            await client.disconnect()
+            self.asrClient = nil
+            return
+        }
 
-        // Start ASR event consumption
+        // ── Phase 3: Flush buffer → switch to live pipeline ──
+
         let events = await client.events
         eventConsumptionTask = Task { [weak self] in
             for await event in events {
@@ -235,51 +289,28 @@ actor RecognitionSession {
             }
         }
 
-        // Wire audio level → UI
-        let levelHandler = self.onAudioLevel
-        audioEngine.onAudioLevel = { level in
-            levelHandler?(level)
+        let chunkContinuation = setupAudioChunkPipeline()
+
+        // Flush all chunks buffered during connect
+        let bufferedChunks = audioBuffer.drain()
+        for chunk in bufferedChunks {
+            chunkContinuation.yield(chunk)
         }
 
-        // Wire audio callback → ASR
-        let chunkContinuation = setupAudioChunkPipeline()
-        var chunkCount = 0
+        // Switch callback from buffer to live pipeline
+        var chunkCount = bufferedChunks.count
         audioEngine.onAudioChunk = { [weak self] data in
             guard let self else { return }
             chunkCount += 1
-            if chunkCount == 1 {
-                NSLog("[Session] First audio chunk: %d bytes", data.count)
-                DebugFileLogger.log("first audio chunk bytes=\(data.count)")
-                Task {
-                    await self.markReadyIfNeeded()
-                }
-            }
             chunkContinuation.yield(data)
         }
 
-        do {
-            try audioEngine.start()
-            NSLog("[Session] Audio engine started OK")
-            DebugFileLogger.log("audio engine started OK")
-        } catch {
-            NSLog("[Session] Audio engine start FAILED: %@", String(describing: error))
-            DebugFileLogger.log("audio engine start failed: \(String(describing: error))")
-            SoundFeedback.playError()
-            await finishAudioChunkPipeline(timeout: .milliseconds(100))
-            await client.disconnect()
-            self.asrClient = nil
-            state = .idle
-            onASREvent?(.error(error))
-            return
+        // Catch any chunks that arrived between drain and callback switch
+        for chunk in audioBuffer.drain() {
+            chunkContinuation.yield(chunk)
         }
 
-        state = .recording
-        DebugFileLogger.log("session entered recording state, waiting for first audio chunk")
-
-        // Lower system volume during recording if enabled
-        if UserDefaults.standard.bool(forKey: "tf_lowerVolumeOnRecord") {
-            SystemVolumeManager.lower(to: 0.2)
-        }
+        DebugFileLogger.log("ASR pipeline live, flushed \(bufferedChunks.count) buffered chunks")
 
         // Pre-warm LLM connection for modes with post-processing
         if !currentMode.prompt.isEmpty, let llmConfig = KeychainService.loadLLMConfig() {
