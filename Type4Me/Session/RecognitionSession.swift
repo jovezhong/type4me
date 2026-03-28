@@ -523,14 +523,17 @@ actor RecognitionSession {
             }
 
             state = .injecting
-            injectionEngine.copyToClipboard(finalText)
+            let preserveClipboard = UserDefaults.standard.bool(forKey: "tf_preserveClipboard")
+            injectionEngine.method = preserveClipboard ? .keyboard : .clipboard
 
             let injectionOutcome: InjectionOutcome
             if injectionAborted {
+                // ESC abort: still copy to clipboard for manual paste, skip injection
+                injectionEngine.copyToClipboard(finalText)
                 DebugFileLogger.log("stop: injection aborted by ESC, text saved to clipboard & history")
                 injectionOutcome = .copiedToClipboard
             } else {
-                DebugFileLogger.log("stop: injecting +\(ContinuousClock.now - stopT0)")
+                DebugFileLogger.log("stop: injecting method=\(preserveClipboard ? "keyboard" : "clipboard") +\(ContinuousClock.now - stopT0)")
                 injectionOutcome = injectionEngine.inject(finalText)
             }
             onASREvent?(.finalized(text: finalText, injection: injectionOutcome))
