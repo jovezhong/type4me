@@ -16,6 +16,49 @@ final class TextInjectionEngine: @unchecked Sendable {
         let isEditable: Bool
     }
 
+    private struct ClipboardSnapshot {
+        struct Item {
+            let types: [NSPasteboard.PasteboardType]
+            let data: [NSPasteboard.PasteboardType: Data]
+        }
+        let items: [Item]
+        let changeCount: Int
+
+        static func capture() -> ClipboardSnapshot {
+            let pb = NSPasteboard.general
+            let changeCount = pb.changeCount
+            var items: [Item] = []
+            for pbItem in pb.pasteboardItems ?? [] {
+                var dataMap: [NSPasteboard.PasteboardType: Data] = [:]
+                let types = pbItem.types
+                for type in types {
+                    if let data = pbItem.data(forType: type) {
+                        dataMap[type] = data
+                    }
+                }
+                items.append(Item(types: types, data: dataMap))
+            }
+            return ClipboardSnapshot(items: items, changeCount: changeCount)
+        }
+
+        func restore() {
+            let pb = NSPasteboard.general
+            guard !items.isEmpty else { return }
+            // Don't restore if another app changed the clipboard during injection
+            guard pb.changeCount == changeCount + 1 else { return }
+            pb.clearContents()
+            for item in items {
+                let pbItem = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data[type] {
+                        pbItem.setData(data, forType: type)
+                    }
+                }
+                pb.writeObjects([pbItem])
+            }
+        }
+    }
+
     // MARK: - Public
 
     var method: InjectionMethod = .clipboard
@@ -69,18 +112,25 @@ final class TextInjectionEngine: @unchecked Sendable {
     // MARK: - Clipboard injection
 
     private func injectViaClipboard(_ text: String) -> InjectionOutcome {
+        let savedClipboard = ClipboardSnapshot.capture()
         let beforePaste = captureFocusedElementSnapshot()
 
         copyToClipboard(text)
         usleep(50_000)
         simulatePaste()
-        // Wait for the target app to process the paste event before returning.
-        // CGEvent.post is async; without this delay, subsequent clipboard writes
-        // (e.g. finalize's copyToClipboard) can overwrite the clipboard before
-        // the target app reads it.
         usleep(100_000)
+
         let afterPaste = captureFocusedElementSnapshot()
-        return inferInjectionOutcome(before: beforePaste, after: afterPaste, pastedText: text)
+        let outcome = inferInjectionOutcome(before: beforePaste, after: afterPaste, pastedText: text)
+
+        if outcome == .inserted {
+            // Paste succeeded: restore the user's original clipboard
+            usleep(50_000)  // Extra delay to ensure target app has read the clipboard
+            savedClipboard.restore()
+        }
+        // If .copiedToClipboard: leave recognized text in clipboard as fallback
+
+        return outcome
     }
 
     private func simulatePaste() {
@@ -165,37 +215,61 @@ final class TextInjectionEngine: @unchecked Sendable {
         after: FocusedElementSnapshot?,
         pastedText: String
     ) -> InjectionOutcome {
-        // Optimistic: assume paste succeeded unless we can positively confirm
-        // the focused element is non-editable AND value didn't change.
-        // Most Electron/WebView apps (Claude, Slack, etc.) don't expose
-        // Accessibility attributes reliably, so false negatives are common.
         guard let before, let after else {
             return .inserted
         }
 
-        // If either snapshot says editable, trust it
-        if before.isEditable || after.isEditable {
-            return .inserted
+        // No frontmost app → nothing to paste into
+        if before.bundleIdentifier == nil && after.bundleIdentifier == nil {
+            return .copiedToClipboard
         }
 
-        // Value changed → paste worked
+        // Value changed → paste definitely worked (strongest signal)
         if let beforeValue = before.value, let afterValue = after.value, beforeValue != afterValue {
             return .inserted
         }
 
-        // Can confirm: non-editable role with no value change → clipboard only
+        // Either snapshot says editable → trust it
+        if before.isEditable || after.isEditable {
+            return .inserted
+        }
+
+        // Known non-editable roles with no value change → paste failed
         let nonEditableRoles: Set<String> = [
             kAXStaticTextRole as String,
             kAXImageRole as String,
             kAXGroupRole as String,
             kAXWindowRole as String,
+            kAXButtonRole as String,
+            kAXCheckBoxRole as String,
+            kAXToolbarRole as String,
+            kAXMenuBarRole as String,
+            kAXMenuItemRole as String,
+            kAXScrollBarRole as String,
+            kAXSliderRole as String,
+            kAXProgressIndicatorRole as String,
+            kAXIncrementorRole as String,
+            kAXBusyIndicatorRole as String,
+            kAXRadioButtonRole as String,
+            kAXPopUpButtonRole as String,
+            kAXColorWellRole as String,
+            kAXRelevanceIndicatorRole as String,
+            kAXLevelIndicatorRole as String,
+            kAXCellRole as String,
+            kAXLayoutAreaRole as String,
+            kAXRowRole as String,
+            kAXColumnRole as String,
+            kAXOutlineRole as String,
+            kAXTableRole as String,
+            kAXBrowserRole as String,
+            kAXSplitGroupRole as String,
         ]
         if let role = after.role, nonEditableRoles.contains(role),
            before.value == after.value {
             return .copiedToClipboard
         }
 
-        // Default: assume success
+        // Default: assume success (covers Electron/Gecko/CEF with nil/unknown roles)
         return .inserted
     }
 
