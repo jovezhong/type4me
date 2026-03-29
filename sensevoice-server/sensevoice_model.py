@@ -1019,7 +1019,9 @@ class StreamingSenseVoice:
         self.device = device
         self.model, kwargs = self.load_model(model=model, device=device)
         # language query
-        language = self.model.lid_dict[language]
+        self._language_id = self.model.lid_dict[language]  # for ONNX path
+        self._textnorm_id = self.model.textnorm_dict["withitn" if textnorm else "woitn"]
+        language = self._language_id
         language = torch.LongTensor([[language]]).to(self.device)
         language = self.model.embed(language).repeat(1, 1, 1)
         # text normalization query
@@ -1106,8 +1108,8 @@ class StreamingSenseVoice:
         if self._onnx_session is not None:
             # ONNX path: int8 quantized, ~13x faster
             x_length = np.array([x.shape[1]], dtype=np.int32)
-            language = np.array([0], dtype=np.int32)   # auto
-            text_norm = np.array([14], dtype=np.int32)  # withitn (14=with, 15=without)
+            language = np.array([self._language_id], dtype=np.int32)
+            text_norm = np.array([self._textnorm_id], dtype=np.int32)
             result = self._onnx_session.run(
                 None,
                 {"x": x, "x_length": x_length, "language": language, "text_norm": text_norm},
@@ -1135,7 +1137,7 @@ class StreamingSenseVoice:
         if not filtered:
             return ""
         text = self.tokenizer.decode(filtered)
-        return _clean_punctuation(text)
+        return _clean_text(text)
 
     def get_size(self):
         effective_size = self.cur_idx + 1 - self.padding
@@ -1147,8 +1149,8 @@ class StreamingSenseVoice:
         if self._onnx_session is not None:
             x = speech.numpy()[np.newaxis, :, :]
             x_length = np.array([x.shape[1]], dtype=np.int32)
-            language = np.array([0], dtype=np.int32)
-            text_norm = np.array([14], dtype=np.int32)
+            language = np.array([self._language_id], dtype=np.int32)
+            text_norm = np.array([self._textnorm_id], dtype=np.int32)
             result = self._onnx_session.run(
                 None,
                 {"x": x, "x_length": x_length, "language": language, "text_norm": text_norm},
@@ -1172,7 +1174,7 @@ class StreamingSenseVoice:
             if len(self.tokenizer.decode(token).strip()) == 0:
                 continue
             times_ms.append(step * 60)
-        return times_ms, _clean_punctuation(self.tokenizer.decode(tokens))
+        return times_ms, _clean_text(self.tokenizer.decode(tokens))
 
     def streaming_inference(self, audio, is_last):
         self.fbank.accept_waveform(audio, is_last)
@@ -1212,12 +1214,16 @@ import re
 # Punctuation marks (Chinese + English)
 _PUNCT = set('，。！？、；：""''（）…—,。!?;:\'"().-')
 
-def _clean_punctuation(text: str) -> str:
-    """Remove consecutive duplicate punctuation and fix common artifacts."""
+def _clean_text(text: str) -> str:
+    """Clean up recognition artifacts: tags, Korean/Japanese chars, duplicate punctuation."""
     if not text:
         return text
     # Strip SenseVoice tags like <|zh|><|NEUTRAL|><|Speech|><|withitn|>
     text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+    # Remove Korean Hangul (U+AC00-U+D7AF, U+1100-U+11FF, U+3130-U+318F)
+    text = re.sub(r'[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]', '', text)
+    # Remove Japanese Hiragana (U+3040-U+309F) and Katakana (U+30A0-U+30FF)
+    text = re.sub(r'[\u3040-\u309F\u30A0-\u30FF]', '', text)
     # Remove consecutive punctuation where first is a comma-like and second is a period-like
     # e.g. "，。" → "。"  "，！" → "！"  ",." → "."
     text = re.sub(r'[,，、;；][。.!！?？]', lambda m: m.group()[-1], text)
