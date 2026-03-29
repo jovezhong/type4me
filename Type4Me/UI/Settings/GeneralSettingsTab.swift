@@ -586,26 +586,24 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         testTask?.cancel()
         asrTestStatus = .testing
         testTask = Task {
-            #if HAS_SHERPA_ONNX
             do {
-                let config = SherpaASRConfig(credentials: ["modelDir": ModelManager.defaultModelsDir])
-                guard let config else {
-                    guard !Task.isCancelled else { return }
-                    asrTestStatus = .failed(L("配置错误", "Config error"))
-                    return
+                // Ensure server is running
+                let running = await SenseVoiceServerManager.shared.isRunning
+                if !running {
+                    try await SenseVoiceServerManager.shared.start()
                 }
-                let client = SenseVoiceWSClient()
-                try await client.connect(config: config, options: currentASRRequestOptions(enablePunc: false))
-                await client.disconnect()
+                // Health check
+                let healthy = await SenseVoiceServerManager.shared.isHealthy()
                 guard !Task.isCancelled else { return }
-                asrTestStatus = .success
+                if healthy {
+                    asrTestStatus = .success
+                } else {
+                    asrTestStatus = .failed(L("服务未就绪", "Server not ready"))
+                }
             } catch {
                 guard !Task.isCancelled else { return }
-                asrTestStatus = .failed(L("加载失败", "Load failed"))
+                asrTestStatus = .failed(error.localizedDescription)
             }
-            #else
-            asrTestStatus = .failed(L("SherpaOnnx 未编译", "SherpaOnnx not available"))
-            #endif
         }
     }
 
