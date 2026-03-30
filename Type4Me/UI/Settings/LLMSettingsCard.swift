@@ -391,7 +391,6 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                 if provider == .localQwen {
                     // LLM runs on Qwen3-ASR server (shares Metal GPU lock)
                     let port = SenseVoiceServerManager.currentQwen3Port ?? SenseVoiceServerManager.currentPort
-                    DebugFileLogger.log("LLM test: q3Port=\(SenseVoiceServerManager.currentQwen3Port ?? -1) svPort=\(SenseVoiceServerManager.currentPort ?? -1) using=\(port ?? -1)")
                     guard let port else {
                         guard !Task.isCancelled else { return }
                         llmTestStatus = .failed(L("Qwen3 服务未运行，请先启动", "Qwen3 server not running, start it first"))
