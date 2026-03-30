@@ -60,6 +60,9 @@ actor SenseVoiceServerManager {
             return
         }
 
+        // Kill any orphaned server processes from previous app runs
+        killOrphanedServers()
+
         // SenseVoice is always the primary server (streaming partials + fallback final)
         try await launchSenseVoiceServer()
 
@@ -211,6 +214,34 @@ actor SenseVoiceServerManager {
         qwen3StdoutPipe = nil
 
         logger.info("All ASR servers stopped")
+    }
+
+    /// Kill orphaned server processes from previous app runs.
+    /// When Type4Me is force-killed or crashes, child server processes survive as orphans.
+    /// Each holds ~1-2GB Metal GPU memory, so cleaning them up is critical.
+    private func killOrphanedServers() {
+        let scriptNames = ["sensevoice-server/server.py", "qwen3-asr-server/server.py"]
+        for name in scriptNames {
+            let pipe = Pipe()
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            proc.arguments = ["-f", name]
+            proc.standardOutput = pipe
+            proc.standardError = FileHandle.nullDevice
+            try? proc.run()
+            proc.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { continue }
+
+            for line in output.split(separator: "\n") {
+                if let pid = Int32(line.trimmingCharacters(in: .whitespaces)) {
+                    kill(pid, SIGTERM)
+                    logger.info("Killed orphaned server process PID \(pid) (\(name))")
+                    DebugFileLogger.log("Killed orphaned server PID \(pid) (\(name))")
+                }
+            }
+        }
     }
 
     /// Check if the server is healthy.
