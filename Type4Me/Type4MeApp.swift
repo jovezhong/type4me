@@ -319,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var retryTimer: Timer?
+    private var hotkeyRetryCount = 0
 
     private func startHotkeyWithRetry() {
         let success = hotkeyManager.start()
@@ -327,11 +328,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if success {
             retryTimer?.invalidate()
             retryTimer = nil
+            hotkeyRetryCount = 0
             return
         }
 
         // Prompt for accessibility and poll until granted
         PermissionManager.promptAccessibilityPermission()
+        hotkeyRetryCount = 0
         retryTimer?.invalidate()
         retryTimer = Timer.scheduledTimer(
             timeInterval: 2.0,
@@ -346,11 +349,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleHotkeyRetry(_ timer: Timer) {
         if PermissionManager.hasAccessibilityPermission {
             let ok = hotkeyManager.start()
-            NSLog("[Type4Me] Hotkey retry: %@", ok ? "OK" : "still failing")
+            hotkeyRetryCount += 1
+            NSLog("[Type4Me] Hotkey retry #%d: %@", hotkeyRetryCount, ok ? "OK" : "still failing")
             if ok {
                 timer.invalidate()
                 retryTimer = nil
+                hotkeyRetryCount = 0
+            } else if hotkeyRetryCount >= 5 {
+                // Permission granted but event tap still fails (macOS caches denial at kernel level).
+                // Suggest restart.
+                timer.invalidate()
+                retryTimer = nil
+                hotkeyRetryCount = 0
+                NSLog("[Type4Me] Accessibility granted but hotkey tap failed after retries. Suggesting restart.")
+                showRestartAlert()
             }
+        }
+    }
+
+    private func showRestartAlert() {
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("辅助功能权限已开启，但快捷键未生效", comment: "")
+        alert.informativeText = NSLocalizedString(
+            "macOS 有时需要重启应用才能激活全局快捷键。点击「重启」自动重启 Type4Me。",
+            comment: ""
+        )
+        alert.addButton(withTitle: NSLocalizedString("重启", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("稍后", comment: ""))
+        alert.alertStyle = .informational
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            // Relaunch the app
+            let url = Bundle.main.bundleURL
+            let task = Process()
+            task.launchPath = "/usr/bin/open"
+            task.arguments = ["-n", url.path]
+            try? task.run()
+            NSApp.terminate(nil)
         }
     }
 
@@ -442,6 +477,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Synchronous kill: don't rely on async Task, app exits immediately after this returns
         SenseVoiceServerManager.killAllServerProcesses()
+    }
+
+    // MARK: - URL Scheme Handling
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard url.scheme == "type4me" else { continue }
+            switch url.host {
+            case "reload-vocabulary":
+                NSLog("[Type4Me] URL command: reload-vocabulary")
+                SenseVoiceServerManager.syncHotwordsAndRestart()
+            default:
+                NSLog("[Type4Me] Unknown URL command: \(url)")
+            }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

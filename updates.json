@@ -1,6 +1,11 @@
 {
-  "latest": "1.5.0",
+  "latest": "1.5.1",
   "releases": [
+    {
+      "version": "1.5.1",
+      "date": "2026-03-30",
+      "notes": "- 修复片段替换链式叠加 bug（\"Cloud Code\" 被替换成 \"Claudee Code\"）\n- 快捷键 event tap 健康检查：自动检测和恢复静默失效的全局快捷键\n- 辅助功能权限重试改进：5 次失败后提示重启 App\n- 新增 type4me:// URL scheme，支持外部工具触发词表刷新\n- 签名优化：自动创建持久化自签名证书，避免重编译后辅助功能权限失效\n- 移除 quarantine flag，防止 Accessibility 权限静默失效"
+    },
     {
       "version": "1.5.0",
       "date": "2026-03-30",

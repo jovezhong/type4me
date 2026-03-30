@@ -7,7 +7,7 @@ APP_NAME="Type4Me"
 APP_EXECUTABLE="Type4Me"
 APP_ICON_NAME="AppIcon"
 APP_BUNDLE_ID="${APP_BUNDLE_ID:-com.type4me.app}"
-APP_VERSION="${APP_VERSION:-1.5.0}"
+APP_VERSION="${APP_VERSION:-1.5.1}"
 APP_BUILD="${APP_BUILD:-1}"
 MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-14.0}"
 MICROPHONE_USAGE_DESCRIPTION="${MICROPHONE_USAGE_DESCRIPTION:-Type4Me 需要访问麦克风以录制语音并将其转换为文本。}"
@@ -18,8 +18,54 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     SIGNING_IDENTITY="$CODESIGN_IDENTITY"
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Type4Me Dev"; then
     SIGNING_IDENTITY="Type4Me Dev"
+elif [ -d "$APP_PATH" ] && codesign -dv "$APP_PATH" 2>/dev/null; then
+    # Existing app is already signed -- reuse its identity to preserve Accessibility permission.
+    # Changing signing identity invalidates macOS TCC entries (Accessibility, etc).
+    EXISTING_AUTHORITY=$(codesign -dvvv "$APP_PATH" 2>&1 | grep "^Authority=" | head -1 | cut -d= -f2)
+    if [ -n "$EXISTING_AUTHORITY" ] && security find-identity -v -p codesigning 2>/dev/null | grep -q "$EXISTING_AUTHORITY"; then
+        SIGNING_IDENTITY="$EXISTING_AUTHORITY"
+        echo "Reusing existing signing identity: $SIGNING_IDENTITY"
+    else
+        # Existing app was ad-hoc signed or cert is gone -- keep ad-hoc to not break permission
+        SIGNING_IDENTITY="-"
+    fi
 else
-    SIGNING_IDENTITY="-"
+    # Fresh install, no existing app. Create a persistent self-signed certificate
+    # instead of ad-hoc. Ad-hoc signing generates a new CDHash every build, causing
+    # macOS to revoke Accessibility permission on each rebuild.
+    CERT_NAME="Type4Me Local"
+    if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; then
+        echo "Creating self-signed certificate '$CERT_NAME' for consistent code signing..."
+        echo "This is a one-time operation to keep Accessibility permissions across rebuilds."
+        CERT_TEMP=$(mktemp -d)
+        cat > "$CERT_TEMP/cert.cfg" <<CERTEOF
+[ req ]
+distinguished_name = req_dn
+[ req_dn ]
+CN = $CERT_NAME
+[ extensions ]
+keyUsage = digitalSignature
+extendedKeyUsage = codeSigning
+CERTEOF
+        openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$CERT_TEMP/key.pem" -out "$CERT_TEMP/cert.pem" \
+            -days 3650 -subj "/CN=$CERT_NAME" -extensions extensions \
+            -config "$CERT_TEMP/cert.cfg" 2>/dev/null
+        openssl pkcs12 -export -out "$CERT_TEMP/cert.p12" \
+            -inkey "$CERT_TEMP/key.pem" -in "$CERT_TEMP/cert.pem" \
+            -passout pass: 2>/dev/null
+        security import "$CERT_TEMP/cert.p12" -k ~/Library/Keychains/login.keychain-db \
+            -T /usr/bin/codesign -P "" 2>/dev/null || \
+        security import "$CERT_TEMP/cert.p12" -k ~/Library/Keychains/login.keychain \
+            -T /usr/bin/codesign -P "" 2>/dev/null || true
+        security add-trusted-cert -p codeSign -k ~/Library/Keychains/login.keychain-db \
+            "$CERT_TEMP/cert.pem" 2>/dev/null || \
+        security add-trusted-cert -p codeSign -k ~/Library/Keychains/login.keychain \
+            "$CERT_TEMP/cert.pem" 2>/dev/null || true
+        rm -rf "$CERT_TEMP"
+        echo "Certificate '$CERT_NAME' created and trusted."
+    fi
+    SIGNING_IDENTITY="$CERT_NAME"
 fi
 
 echo "Building universal release (arm64 + x86_64)..."
@@ -80,6 +126,17 @@ cat >"$INFO_PLIST" <<EOF
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>${APP_BUNDLE_ID}</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>type4me</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF
@@ -190,5 +247,9 @@ if [ -n "$SERVER_TEMP" ]; then
     [ -f "$SERVER_TEMP/qwen3-asr-server" ] && mv "$SERVER_TEMP/qwen3-asr-server" "$Q3_WRAPPER"
     rm -rf "$SERVER_TEMP"
 fi
+
+# Remove quarantine flag that macOS adds to downloaded apps.
+# This flag can silently prevent Accessibility permission from working.
+xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
 
 echo "App bundle ready at $APP_PATH"

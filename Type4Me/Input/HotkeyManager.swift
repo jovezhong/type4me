@@ -54,6 +54,9 @@ final class HotkeyManager: NSObject {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var healthCheckTimer: Timer?
+    /// Timestamp of the last event received by the tap callback.
+    fileprivate var lastEventTime: Date?
 
     // MARK: - Registration
 
@@ -89,16 +92,20 @@ final class HotkeyManager: NSObject {
         }
 
         eventTap = tap
+        lastEventTime = nil
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         runLoopSource = source
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
 
+        startHealthCheck()
         return true
     }
 
     func stop() {
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = nil
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -107,6 +114,7 @@ final class HotkeyManager: NSObject {
         }
         eventTap = nil
         runLoopSource = nil
+        lastEventTime = nil
         holdState = [:]
         toggleState = [:]
         wasModifierDown = [:]
@@ -114,9 +122,44 @@ final class HotkeyManager: NSObject {
         holdSafetyTimers = [:]
     }
 
+    // MARK: - Health check
+
+    /// Periodically verify the event tap is actually alive.
+    /// Detects the "silent disable" race where tapCreate succeeds but the tap is dead.
+    private func startHealthCheck() {
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            guard let self, let tap = self.eventTap else { return }
+
+            // Check 1: Is the tap still enabled at the Mach port level?
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                NSLog("[Type4Me] Health check: tap disabled, re-enabling...")
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+
+            // Check 2: If we haven't received ANY event in 30s, the tap may be silently dead.
+            // (User is almost certainly pressing keys within 30s of normal use.)
+            // Only flag this if the tap has been alive for at least 30s (give it time to warm up).
+            if let lastEvent = self.lastEventTime,
+               Date().timeIntervalSince(lastEvent) > 30 {
+                NSLog("[Type4Me] Health check: no events for 30s, reinstalling tap...")
+                self.reinstallTap()
+            }
+        }
+    }
+
+    /// Tear down and recreate the event tap from scratch.
+    private func reinstallTap() {
+        stop()
+        let ok = start()
+        NSLog("[Type4Me] Tap reinstall: %@", ok ? "OK" : "FAILED")
+    }
+
     // MARK: - Event handling
 
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        lastEventTime = Date()
+
         // Re-enable tap if system disabled it, and recover any stuck hold states.
         // When macOS disables the tap (main thread blocked >1s), keyUp events are lost.
         // We must check if held keys are still physically down; if not, fire onStop.

@@ -134,6 +134,16 @@ struct SetupWizardView: View {
                     PermissionManager.promptAccessibilityPermission()
                     PermissionManager.openAccessibilitySettings()
                 }
+
+                if !hasAccessibility {
+                    Text(L(
+                        "请在系统设置中找到 Type4Me 并打开开关。如已开启但快捷键仍无效，请重启 App。",
+                        "Find Type4Me in System Settings and toggle it ON. If hotkeys still don't work after enabling, please restart the app."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 340)
+                }
             }
             .frame(width: 340)
 

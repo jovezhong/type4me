@@ -292,8 +292,9 @@ enum SnippetStorage {
     private static func buildFlexPattern(_ trigger: String) -> String {
         let chars = trigger.filter { !$0.isWhitespace }
         guard !chars.isEmpty else { return NSRegularExpression.escapedPattern(for: trigger) }
-        return chars.map { NSRegularExpression.escapedPattern(for: String($0)) }
+        let core = chars.map { NSRegularExpression.escapedPattern(for: String($0)) }
             .joined(separator: "\\s*")
+        return "\\b" + core + "\\b"
     }
 
     // MARK: - File I/O helpers

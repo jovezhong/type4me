@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.1 — Bug 修复 + 稳定性改进 (2026-03-30)
+
+- 修复片段替换链式叠加 bug：正则缺少 word boundary，导致前一条替换的产物被后续规则二次匹配（如 "Cloud Code" → "Claudee Code"）
+- 快捷键 event tap 健康检查：每 10 秒检测 tap 是否存活，静默失效时自动重建
+- 辅助功能权限重试改进：5 次重试失败后弹窗提示重启 App，附带一键重启
+- 新增 `type4me://reload-vocabulary` URL scheme，支持外部工具（如 Claude Code skill）触发热词/片段词表刷新
+- 签名优化：首次构建自动创建持久化自签名证书 "Type4Me Local"，避免 ad-hoc 签名每次重编译后辅助功能权限失效
+- 构建时自动移除 quarantine flag，防止 Accessibility 权限静默失效
+- 设置向导增加辅助功能权限提示文案
+
 ## v1.5.0 — Dual-ASR + 三版本发布 (2026-03-30)
 
 ### 🎯 Dual-ASR 架构
