@@ -1,3 +1,5 @@
+> update：官方[词库管理Skill](https://github.com/joewongjc/type4me-vocab-skill)，帮你大幅提高识别准确率
+
 # MacOS语音输入法
 
 - **语音识别**：内置本地识别引擎、媲美云端引擎准确率；支持多家云端引擎厂商；支持流式识别、边说边出字，说完无需等待、快速输入；
