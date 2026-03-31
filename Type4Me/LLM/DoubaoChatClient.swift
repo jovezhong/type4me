@@ -16,7 +16,7 @@ actor DoubaoChatClient: LLMClient {
             config.connectionProxyDictionary = [:]
             return URLSession(configuration: config)
         }
-        return session
+        return URLSession.shared
     }
 
     /// Pre-establish TCP+TLS connection so the first real request skips handshake.
