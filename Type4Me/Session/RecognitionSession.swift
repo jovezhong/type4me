@@ -205,7 +205,8 @@ actor RecognitionSession {
         let requestOptions = ASRRequestOptions(
             enablePunc: !needsLLM,
             hotwords: hotwords,
-            boostingTableID: biasSettings.boostingTableID
+            boostingTableID: biasSettings.boostingTableID,
+            bypassProxy: ProxyBypassMode.current.bypassASR
         )
 
         // Capture prompt context while the user's selection is still active.
@@ -264,16 +265,17 @@ actor RecognitionSession {
         // ── Phase 2: Connect ASR (audio is already recording) ──
 
         do {
+            DebugFileLogger.log("ASR connecting provider=\(provider.rawValue)")
             try await client.connect(config: config, options: requestOptions)
             NSLog(
                 "[Session] ASR connected OK (streaming, hotwords=%d, history=%d)",
                 hotwords.count,
                 requestOptions.contextHistoryLength
             )
-            DebugFileLogger.log("ASR connected OK")
+            DebugFileLogger.log("ASR connected OK provider=\(provider.rawValue)")
         } catch {
-            NSLog("[Session] ASR connect FAILED: %@", String(describing: error))
-            DebugFileLogger.log("ASR connect failed: \(String(describing: error))")
+            NSLog("[Session] ASR connect FAILED provider=%@ error=%@", provider.rawValue, String(describing: error))
+            DebugFileLogger.log("ASR connect failed provider=\(provider.rawValue): \(String(describing: error))")
             SoundFeedback.playError()
             audioEngine.stop()
             audioEngine.onAudioChunk = nil
@@ -369,11 +371,14 @@ actor RecognitionSession {
             return
         }
 
+        // Set state BEFORE any await to prevent a second stop from
+        // slipping through the guard during the suspension point.
+        state = .finishing
+
         let stopT0 = ContinuousClock.now
         SystemVolumeManager.restore()  // Restore before stop sound plays
         try? await Task.sleep(for: .milliseconds(50))  // Let OS apply volume change
         SoundFeedback.playStop()
-        state = .finishing
 
         // Stop capture first so flushRemaining() can emit the tail audio chunk.
         audioEngine.stop()
@@ -385,36 +390,72 @@ actor RecognitionSession {
             return
         }
 
-        // For LLM modes: reuse speculative LLM if text matches,
-        // otherwise fire fresh LLM immediately.
-        // Batch (non-streaming) providers skip early LLM — no real text available yet.
+        // Keep speculative LLM task alive — we'll compare its input text
+        // against the final ASR transcript after full teardown.
         cancelSpeculativeLLM()
         let needsLLM = !currentMode.prompt.isEmpty
         let provider = KeychainService.selectedASRProvider
-        let canEarlyLLM = ASRProviderRegistry.capabilities(for: provider).isStreaming
+
+        // ASR teardown: send endAudio and drain event stream with hard deadlines.
+        // Uses detached tasks + continuation so a stuck client can't block stopRecording.
+        let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider).isStreaming
+        var asrTeardownClean = true
+        if let client = asrClient {
+            let endAudioTimeout: Duration = providerIsStreaming ? .seconds(3) : .seconds(60)
+            let endAudioOK = await withTimeout(endAudioTimeout) {
+                try await client.endAudio()
+            }
+            if !endAudioOK {
+                DebugFileLogger.log("endAudio timeout, forcing disconnect")
+                asrTeardownClean = false
+            }
+
+            if asrTeardownClean, let evtTask = eventConsumptionTask {
+                let drainTimeout: Duration = providerIsStreaming ? .seconds(2) : .seconds(5)
+                let drained = await withTimeout(drainTimeout) {
+                    await evtTask.value
+                }
+                if !drained {
+                    DebugFileLogger.log("event stream drain timeout")
+                    asrTeardownClean = false
+                }
+            }
+
+            await client.disconnect()
+            eventConsumptionTask?.cancel()
+            DebugFileLogger.log("stop: ASR teardown complete (clean=\(asrTeardownClean)) +\(ContinuousClock.now - stopT0)")
+        }
+
+        // Now that we have the final transcript, decide whether to reuse
+        // the speculative LLM result or fire a fresh request.
+        let canEarlyLLM = providerIsStreaming
         var earlyLLMTask: Task<String?, Never>?
         if needsLLM && canEarlyLLM {
-            var earlyText = currentTranscript.composedText
+            var finalASRText = currentTranscript.composedText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            earlyText = SnippetStorage.applyEffective(to: earlyText)
-            DebugFileLogger.log("stop: needsLLM=true mode=\(currentMode.name) text=\(earlyText.count)chars specMatch=\(earlyText == speculativeLLMText)")
-            if !earlyText.isEmpty {
-                if earlyText == speculativeLLMText, let specTask = speculativeLLMTask {
-                    // Speculative LLM matches — reuse (may already be done!)
+            finalASRText = SnippetStorage.applyEffective(to: finalASRText)
+            DebugFileLogger.log("stop: needsLLM=true mode=\(currentMode.name) text=\(finalASRText.count)chars specMatch=\(finalASRText == speculativeLLMText)")
+            if !finalASRText.isEmpty {
+                if finalASRText == speculativeLLMText, let specTask = speculativeLLMTask {
+                    // Final transcript matches speculative input — reuse (may already be done!)
                     earlyLLMTask = specTask
                     state = .postProcessing
                     DebugFileLogger.log("stop: reusing speculative LLM +\(ContinuousClock.now - stopT0)")
                 } else if let llmConfig = KeychainService.loadLLMConfig() {
-                    // Text changed since last speculative call, fire fresh
+                    // Final transcript differs from speculative input (tail words arrived),
+                    // discard stale result and fire fresh LLM with complete text.
                     speculativeLLMTask?.cancel()
                     let prompt = promptContext.expandContextVariables(currentMode.prompt)
                     let client = currentLLMClient()
                     state = .postProcessing
-                    DebugFileLogger.log("stop: fresh LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(earlyText.count) chars +\(ContinuousClock.now - stopT0)")
+                    if finalASRText != speculativeLLMText {
+                        DebugFileLogger.log("stop: final transcript changed (spec=\(speculativeLLMText.count)chars final=\(finalASRText.count)chars), firing fresh LLM")
+                    }
+                    DebugFileLogger.log("stop: fresh LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalASRText.count) chars +\(ContinuousClock.now - stopT0)")
                     earlyLLMTask = Task {
                         do {
                             let result = try await client.process(
-                                text: earlyText, prompt: prompt, config: llmConfig
+                                text: finalASRText, prompt: prompt, config: llmConfig
                             )
                             DebugFileLogger.log("stop: fresh LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
                             return result
@@ -425,57 +466,6 @@ actor RecognitionSession {
                         }
                     }
                 }
-            }
-        }
-
-        // ASR teardown: streaming providers can skip endAudio in LLM modes since
-        // we already have text. Batch providers (e.g. OpenAI REST) MUST await endAudio
-        // because that's where the actual recognition happens.
-        let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider).isStreaming
-        if let client = asrClient {
-            if needsLLM && earlyLLMTask != nil && providerIsStreaming {
-                // Fast path (streaming only): just disconnect, skip the 2-3s finalization.
-                eventConsumptionTask?.cancel()
-                await client.disconnect()
-                DebugFileLogger.log("stop: ASR fast-disconnect +\(ContinuousClock.now - stopT0)")
-            } else {
-                // Full teardown: batch providers get a longer timeout for the HTTP round-trip.
-                let endAudioTimeout: Duration = providerIsStreaming ? .seconds(3) : .seconds(60)
-                do {
-                    try await withThrowingTaskGroup(of: Void.self) { group in
-                        group.addTask { try await client.endAudio() }
-                        group.addTask {
-                            try await Task.sleep(for: endAudioTimeout)
-                            throw CancellationError()
-                        }
-                        try await group.next()
-                        group.cancelAll()
-                    }
-                } catch {
-                    NSLog("[Session] endAudio timed out or failed: %@", String(describing: error))
-                    DebugFileLogger.log("endAudio timeout/error: \(error)")
-                }
-                let drainTimeout: Duration = providerIsStreaming ? .seconds(2) : .seconds(5)
-                if let task = eventConsumptionTask {
-                    let streamDrained = await withTaskGroup(of: Bool.self) { group in
-                        group.addTask {
-                            await task.value
-                            return true
-                        }
-                        group.addTask {
-                            try? await Task.sleep(for: drainTimeout)
-                            return false
-                        }
-                        let first = await group.next() ?? true
-                        group.cancelAll()
-                        return first
-                    }
-                    if !streamDrained {
-                        task.cancel()
-                        DebugFileLogger.log("event stream drain timeout; eventConsumptionTask cancelled")
-                    }
-                }
-                await client.disconnect()
             }
         }
         eventConsumptionTask = nil
@@ -655,46 +645,47 @@ actor RecognitionSession {
 
     // MARK: - Internal helpers
 
-    private var lastChunkSendLog: ContinuousClock.Instant?
-    private var chunkSendCount: Int = 0
-
-    private func sendAudioToASR(_ data: Data) async throws {
-        guard let client = asrClient else { return }
-        let t0 = ContinuousClock.now
-        let provider = KeychainService.selectedASRProvider
-        let audioInput = ASRProviderRegistry.capabilities(for: provider).audioInput
-        switch audioInput {
-        case .pcmData:
-            try await client.sendAudio(data)
-        case .pcmBuffer:
-            guard let buffer = AudioCaptureEngine.makePCMBuffer(from: data) else { return }
-            try await client.sendAudioBuffer(buffer)
-        }
-        let elapsed = ContinuousClock.now - t0
-        chunkSendCount += 1
-        // Log every 50 chunks (~10s) or if send took >200ms
-        let shouldLog = chunkSendCount % 50 == 0
-            || elapsed > .milliseconds(200)
-            || lastChunkSendLog == nil
-        if shouldLog {
-            DebugFileLogger.log("audio chunk #\(chunkSendCount) sent \(data.count)B in \(elapsed)")
-            lastChunkSendLog = ContinuousClock.now
-        }
-    }
-
     private func setupAudioChunkPipeline() -> AsyncStream<Data>.Continuation {
         audioChunkContinuation?.finish()
         audioChunkSenderTask?.cancel()
 
         let (stream, continuation) = AsyncStream<Data>.makeStream()
         audioChunkContinuation = continuation
-        audioChunkSenderTask = Task { [weak self] in
+
+        // Capture everything needed for sending so the Task body
+        // does NOT hop back to the actor.  This prevents a blocking
+        // WebSocket send from starving stopRecording().
+        let client = asrClient
+        let provider = KeychainService.selectedASRProvider
+        let audioInput = ASRProviderRegistry.capabilities(for: provider).audioInput
+
+        audioChunkSenderTask = Task.detached { [weak self] in
+            var chunkCount = 0
+            var lastLogTime: ContinuousClock.Instant?
             for await data in stream {
-                guard let self else { break }
+                guard let client else { break }
+                let t0 = ContinuousClock.now
                 do {
-                    try await self.sendAudioToASR(data)
+                    switch audioInput {
+                    case .pcmData:
+                        try await client.sendAudio(data)
+                    case .pcmBuffer:
+                        guard let buffer = AudioCaptureEngine.makePCMBuffer(from: data) else { continue }
+                        try await client.sendAudioBuffer(buffer)
+                    }
                 } catch {
                     DebugFileLogger.log("audio chunk send failed: \(error)")
+                    // If send fails, stop pumping — connection is dead.
+                    break
+                }
+                let elapsed = ContinuousClock.now - t0
+                chunkCount += 1
+                let shouldLog = chunkCount % 50 == 0
+                    || elapsed > .milliseconds(200)
+                    || lastLogTime == nil
+                if shouldLog {
+                    DebugFileLogger.log("audio chunk #\(chunkCount) sent \(data.count)B in \(elapsed)")
+                    lastLogTime = ContinuousClock.now
                 }
             }
         }
@@ -705,25 +696,10 @@ actor RecognitionSession {
         audioChunkContinuation?.finish()
         audioChunkContinuation = nil
 
-        guard let senderTask = audioChunkSenderTask else { return }
-        let drained = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await senderTask.value
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return false
-            }
-            let first = await group.next() ?? true
-            group.cancelAll()
-            return first
-        }
-
-        if !drained {
-            senderTask.cancel()
-            DebugFileLogger.log("audio chunk pipeline drain timeout; sender task cancelled")
-        }
+        // The sender runs as a detached task, so we don't need to wait
+        // for it.  Just cancel and move on — any in-flight WebSocket send
+        // will complete (or fail) on its own without blocking the actor.
+        audioChunkSenderTask?.cancel()
         audioChunkSenderTask = nil
     }
 
@@ -799,6 +775,33 @@ actor RecognitionSession {
         speculativeLLMTask?.cancel()
         speculativeLLMTask = nil
         speculativeLLMText = ""
+    }
+
+    // MARK: - Timeout Helper
+
+    /// Run a @Sendable closure off-actor with a hard deadline.
+    /// Returns true if completed in time. On timeout the operation task is cancelled.
+    /// Uses detached tasks + continuation so withTaskGroup can't deadlock.
+    private func withTimeout(
+        _ duration: Duration,
+        operation: @Sendable @escaping () async throws -> Void
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let operationTask = Task.detached {
+                try await operation()
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    continuation.resume(returning: true)
+                }
+            }
+            Task.detached {
+                try? await Task.sleep(for: duration)
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    operationTask.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
+        }
     }
 
     // MARK: - Force Reset
