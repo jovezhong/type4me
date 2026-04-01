@@ -138,7 +138,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(TF.settingsAccentRed)
                         .font(.system(size: 12))
-                    Text(L("模型未找到，请将 GGUF 放到 sensevoice-server/models/", "Model not found, place GGUF in sensevoice-server/models/"))
+                    Text(L("模型未找到，请将 GGUF 放到 Models/ 目录", "Model not found, place GGUF in Models/ directory"))
                         .font(.system(size: 11))
                         .foregroundStyle(TF.settingsTextSecondary)
                 }

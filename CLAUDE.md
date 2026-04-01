@@ -3,16 +3,15 @@
 ## Overview
 
 macOS menu bar voice input tool with dual-engine local ASR, multi-provider cloud ASR, and LLM post-processing.
-Local ASR: SenseVoice (streaming) + Qwen3-ASR (final calibration), both as Python WebSocket services managed by `SenseVoiceServerManager`.
+Local ASR: SenseVoice via native sherpa-onnx (streaming) + Qwen3-ASR (final calibration, Python WebSocket service managed by `SenseVoiceServerManager`).
 Cloud ASR: 7 providers implemented (Volcano, OpenAI, Deepgram, AssemblyAI, Soniox, Bailian, Baidu).
 Swift Package Manager project, no Xcode project file. Optional `sherpa-onnx.xcframework` for punctuation restoration.
 
 ## Build & Run
 
 ```bash
-# Local ASR setup (optional, skip for cloud-only)
-cd sensevoice-server && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cd ..
-cd qwen3-asr-server && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cd ..  # Apple Silicon only
+# Qwen3-ASR server setup (optional, Apple Silicon only)
+cd qwen3-asr-server && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cd ..
 
 # Optional: punctuation restoration module (~5 min, requires cmake)
 bash scripts/build-sherpa.sh
@@ -41,9 +40,9 @@ Multi-provider ASR support via `ASRProvider` enum + `ASRProviderConfig` protocol
 ## Local ASR Architecture (SenseVoice + Qwen3-ASR)
 
 ### Dual-Engine Design
-- **SenseVoice** (`sensevoice-server/`): Python FastAPI WebSocket service, provides real-time streaming recognition (partial results as you speak)
+- **SenseVoice**: Native sherpa-onnx integration (Swift), provides real-time streaming recognition (partial results as you speak). No Python dependency.
 - **Qwen3-ASR** (`qwen3-asr-server/`): Python WebSocket service using MLX (Metal GPU), provides final calibration on complete audio for higher accuracy. Apple Silicon only.
-- `SenseVoiceServerManager`: manages both Python server processes, auto-detects Apple Silicon vs Intel, assigns dynamic ports, saves PIDs for graceful shutdown
+- `SenseVoiceServerManager`: manages the Qwen3-ASR Python server process, auto-detects Apple Silicon vs Intel, assigns dynamic ports, saves PIDs for graceful shutdown
 
 ### Recognition Pipeline
 1. `SenseVoiceWSClient` connects to local Python servers via WebSocket
@@ -108,7 +107,7 @@ Credentials are stored at `~/Library/Application Support/Type4Me/credentials.jso
 | `Type4Me/ASR/OpenAIASRClient.swift` | Cloud batch ASR (OpenAI, REST) |
 | `Type4Me/ASR/SherpaPunctuationProcessor.swift` | Optional punctuation restoration (SherpaOnnx) |
 | `Type4Me/Bridge/SherpaOnnxBridge.swift` | SherpaOnnx C API Swift bridge (conditional) |
-| `Type4Me/Services/SenseVoiceServerManager.swift` | Local Python server lifecycle (SenseVoice + Qwen3-ASR) |
+| `Type4Me/Services/SenseVoiceServerManager.swift` | Local Qwen3-ASR Python server lifecycle |
 | `Type4Me/Session/RecognitionSession.swift` | Core state machine: record → ASR → inject |
 | `Type4Me/Audio/AudioCaptureEngine.swift` | Audio capture, `getRecordedAudio()` returns full recording |
 | `Type4Me/UI/AppState.swift` | `ProcessingMode` definition, built-in mode list |
@@ -118,7 +117,6 @@ Credentials are stored at `~/Library/Application Support/Type4Me/credentials.jso
 | `Type4Me/LLM/LLMProvider.swift` | 13 LLM providers (incl. local Qwen offline) |
 | `Type4Me/LLM/LLMProviderRegistry.swift` | LLM provider → config + client factory |
 | `Type4Me/Session/SoundFeedback.swift` | Start/stop/error sounds, multiple sound styles |
-| `sensevoice-server/server.py` | SenseVoice streaming ASR + optional local Qwen LLM |
 | `qwen3-asr-server/server.py` | Qwen3-ASR calibration engine (MLX/Metal, Apple Silicon) |
 | `scripts/deploy.sh` | Build + deploy + launch |
 | `scripts/build-sherpa.sh` | Build sherpa-onnx.xcframework (optional, for punctuation) |

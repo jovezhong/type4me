@@ -56,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotwordStorage.migrateIfNeeded()
         SnippetStorage.migrateIfNeeded()
 
+        // Sync hotwords to Volcengine cloud table (async, non-blocking)
+        VolcHotwordSyncManager.syncIfNeeded()
+
         DebugFileLogger.startSession()
         DebugFileLogger.log("applicationDidFinishLaunching")
         floatingBarController = FloatingBarController(state: appState)
@@ -197,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let needsLocalServer = KeychainService.selectedASRProvider == .sherpa
             || KeychainService.selectedLLMProvider == .localQwen
         if needsLocalServer {
-            if ModelManager.isSenseVoiceBundled || LocalQwenLLMConfig.isModelAvailable {
+            if ModelManager.isQwen3ASRBundled || LocalQwenLLMConfig.isModelAvailable {
                 Task {
                     do {
                         try await SenseVoiceServerManager.shared.start()

@@ -18,7 +18,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     @State private var volcResourceHint: String?
 
     // Local model states
-    @State private var localModelAvailable: Bool = ModelManager.isSenseVoiceBundled
+    @State private var localModelAvailable: Bool = ModelManager.isQwen3ASRBundled
     @State private var serverRunning = false
     @State private var qwen3Running = false
     @State private var svToggling = false
@@ -460,7 +460,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private func refreshModelStatus() {
-        localModelAvailable = ModelManager.isSenseVoiceBundled
+        localModelAvailable = ModelManager.isQwen3ASRBundled
         Task {
             let mgr = SenseVoiceServerManager.shared
             serverRunning = await mgr.isRunning

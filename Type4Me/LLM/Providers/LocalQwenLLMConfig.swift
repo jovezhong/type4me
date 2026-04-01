@@ -80,10 +80,10 @@ struct LocalLLMModel: Sendable {
            FileManager.default.fileExists(atPath: bundled.path) {
             return bundled.path
         }
-        // 2. Dev mode: ~/projects/type4me/sensevoice-server/models/<devFile>
+        // 2. Dev mode: ~/Library/Application Support/Type4Me/models/<devFile>
         let home = NSHomeDirectory()
         let devPath = (home as NSString)
-            .appendingPathComponent("projects/type4me/sensevoice-server/models/\(devFile)")
+            .appendingPathComponent("Library/Application Support/Type4Me/models/\(devFile)")
         if FileManager.default.fileExists(atPath: devPath) {
             return devPath
         }

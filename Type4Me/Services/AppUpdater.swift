@@ -42,7 +42,7 @@ final class AppUpdater {
     init() {
         let macosURL = Bundle.main.executableURL?.deletingLastPathComponent()
         isLocalInstallation = FileManager.default.fileExists(
-            atPath: macosURL?.appendingPathComponent("sensevoice-server-dist").path ?? ""
+            atPath: macosURL?.appendingPathComponent("qwen3-asr-server-dist").path ?? ""
         )
     }
 
@@ -379,7 +379,7 @@ final class AppUpdater {
         if [ "$IS_LOCAL" = "1" ]; then
             TEMP_LOCAL="$(mktemp -d)"
             echo "Preserving local components to $TEMP_LOCAL..."
-            for item in sensevoice-server-dist sensevoice-server qwen3-asr-server-dist qwen3-asr-server; do
+            for item in qwen3-asr-server-dist qwen3-asr-server; do
                 [ -e "$APP_PATH/Contents/MacOS/$item" ] && mv "$APP_PATH/Contents/MacOS/$item" "$TEMP_LOCAL/"
             done
             [ -d "$APP_PATH/Contents/Resources/Models" ] && mv "$APP_PATH/Contents/Resources/Models" "$TEMP_LOCAL/"
@@ -393,7 +393,7 @@ final class AppUpdater {
         # Restore local components
         if [ "$IS_LOCAL" = "1" ] && [ -n "$TEMP_LOCAL" ] && [ -d "$TEMP_LOCAL" ]; then
             echo "Restoring local components..."
-            for item in sensevoice-server-dist sensevoice-server qwen3-asr-server-dist qwen3-asr-server; do
+            for item in qwen3-asr-server-dist qwen3-asr-server; do
                 [ -e "$TEMP_LOCAL/$item" ] && mv "$TEMP_LOCAL/$item" "$APP_PATH/Contents/MacOS/"
             done
             [ -d "$TEMP_LOCAL/Models" ] && mv "$TEMP_LOCAL/Models" "$APP_PATH/Contents/Resources/"
@@ -406,9 +406,9 @@ final class AppUpdater {
         if [ "$SIGNING_IDENTITY" != "-" ] && [ -n "$SIGNING_IDENTITY" ]; then
             echo "Signing with identity: $SIGNING_IDENTITY"
             SERVER_TEMP=""
-            if [ -d "$APP_PATH/Contents/MacOS/sensevoice-server-dist" ]; then
+            if [ -d "$APP_PATH/Contents/MacOS/qwen3-asr-server-dist" ]; then
                 SERVER_TEMP="$(mktemp -d)"
-                for item in sensevoice-server-dist sensevoice-server qwen3-asr-server-dist qwen3-asr-server; do
+                for item in qwen3-asr-server-dist qwen3-asr-server; do
                     [ -e "$APP_PATH/Contents/MacOS/$item" ] && mv "$APP_PATH/Contents/MacOS/$item" "$SERVER_TEMP/"
                 done
             fi
@@ -416,7 +416,7 @@ final class AppUpdater {
             codesign -f -s "$SIGNING_IDENTITY" "$APP_PATH" 2>&1 || echo "Warning: signing failed, continuing..."
 
             if [ -n "$SERVER_TEMP" ] && [ -d "$SERVER_TEMP" ]; then
-                for item in sensevoice-server-dist sensevoice-server qwen3-asr-server-dist qwen3-asr-server; do
+                for item in qwen3-asr-server-dist qwen3-asr-server; do
                     [ -e "$SERVER_TEMP/$item" ] && mv "$SERVER_TEMP/$item" "$APP_PATH/Contents/MacOS/"
                 done
                 rm -rf "$SERVER_TEMP"

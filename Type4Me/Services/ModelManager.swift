@@ -60,20 +60,20 @@ actor ModelManager {
         }
     }
 
-    // MARK: - SenseVoice Availability
+    // MARK: - Local ASR Availability
 
-    /// Whether the SenseVoice model is bundled in the app (full DMG version).
-    nonisolated static var isSenseVoiceBundled: Bool {
-        // Check if sensevoice-server exists in app bundle
+    /// Whether the Qwen3-ASR server is bundled in the app (full DMG version).
+    nonisolated static var isQwen3ASRBundled: Bool {
+        // Check if qwen3-asr-server exists in app bundle
         if let bundled = Bundle.main.executableURL?
             .deletingLastPathComponent()
-            .appendingPathComponent("sensevoice-server"),
+            .appendingPathComponent("qwen3-asr-server"),
            FileManager.default.fileExists(atPath: bundled.path) {
             return true
         }
-        // Dev mode: check if sensevoice-server dir exists in project
+        // Dev mode: check if qwen3-asr-server dir exists in project
         let home = NSHomeDirectory()
-        let devPath = (home as NSString).appendingPathComponent("projects/type4me/sensevoice-server/server.py")
+        let devPath = (home as NSString).appendingPathComponent("projects/type4me/qwen3-asr-server/server.py")
         return FileManager.default.fileExists(atPath: devPath)
     }
 
@@ -191,11 +191,11 @@ actor ModelManager {
     // MARK: - Query (Streaming Models)
 
     nonisolated func isModelAvailable(_ model: StreamingModel) -> Bool {
-        Self.isSenseVoiceBundled
+        Self.isQwen3ASRBundled
     }
 
     nonisolated func isSelectedModelAvailable() -> Bool {
-        Self.isSenseVoiceBundled
+        Self.isQwen3ASRBundled
     }
 
     /// Legacy compatibility — used by RecognitionSession.
