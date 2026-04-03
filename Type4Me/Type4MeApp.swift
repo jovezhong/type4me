@@ -508,6 +508,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "reload-vocabulary":
                 NSLog("[Type4Me] URL command: reload-vocabulary")
                 SenseVoiceServerManager.syncHotwordsAndRestart()
+            case "auth":
+                NSLog("[Type4Me] URL command: auth (no-op, code-based auth now)")
             default:
                 NSLog("[Type4Me] Unknown URL command: \(url)")
             }

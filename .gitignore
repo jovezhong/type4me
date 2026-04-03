@@ -19,7 +19,6 @@ xcuserdata/
 .env
 .env.local
 credentials.json
-Secrets.plist
 
 # Internal docs
 docs/plans/
