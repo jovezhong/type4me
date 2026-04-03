@@ -5,7 +5,6 @@ struct VocabularyTab: View {
     // Hotwords (user file)
     @State private var hotwords: [String] = HotwordStorage.load()
     @State private var newHotword: String = ""
-    @State private var builtinHotwordCount: Int = HotwordStorage.builtinCount()
     @State private var showBulkHotwordsSheet = false
     @State private var bulkHotwordsText = ""
 
@@ -52,57 +51,6 @@ struct VocabularyTab: View {
                 .foregroundStyle(TF.settingsTextTertiary)
                 .padding(.bottom, 12)
 
-            // Bulk import file bar
-            HStack(spacing: 6) {
-                Button {
-                    HotwordStorage.revealBuiltinInFinder()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 10))
-                        Text(L("批量导入文件", "Bulk Import File"))
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(TF.settingsAccentBlue)
-                }
-                .buttonStyle(.plain)
-
-                if builtinHotwordCount > 0 {
-                    Button {
-                        let imported = HotwordStorage.loadBuiltin()
-                        let existing = Set(hotwords.map { $0.lowercased() })
-                        let newWords = imported.filter { !existing.contains($0.lowercased()) }
-                        if !newWords.isEmpty {
-                            hotwords.append(contentsOf: newWords)
-                            HotwordStorage.save(hotwords)
-                        }
-                        builtinHotwordCount = 0
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "square.and.arrow.down")
-                                .font(.system(size: 10))
-                            Text(L("导入 \(builtinHotwordCount) 条", "Import \(builtinHotwordCount)"))
-                                .font(.system(size: 11))
-                        }
-                        .foregroundStyle(TF.settingsAccentAmber)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Button {
-                    builtinHotwordCount = HotwordStorage.builtinCount()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundStyle(TF.settingsAccentBlue)
-                }
-                .buttonStyle(.plain)
-                .help(L("刷新导入文件", "Refresh import file"))
-
-                Spacer()
-            }
-            .padding(.bottom, 8)
-
             // User hotwords
             WrappingHStack(spacing: 6) {
                 ForEach(displayHotwords, id: \.self) { word in
@@ -120,25 +68,24 @@ struct VocabularyTab: View {
                             .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
                     )
                     .onSubmit { addHotword() }
+            }
 
+            HStack(spacing: 8) {
+                Text(L("回车添加，点 × 移除", "Press Enter to add, click x to remove"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                Spacer()
                 Button {
                     showBulkHotwordsSheet = true
                 } label: {
-                    Label(L("批量", "Bulk"), systemImage: "list.bullet.rectangle")
+                    Label(L("批量编辑", "Bulk Edit"), systemImage: "list.bullet.rectangle")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(TF.settingsTextSecondary)
+                        .foregroundStyle(TF.settingsAccentBlue)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg))
             }
-
-            Text(L("回车添加，点 × 移除", "Press Enter to add, click x to remove"))
-                .font(.system(size: 10))
-                .foregroundStyle(TF.settingsTextTertiary)
-                .padding(.top, 4)
+            .padding(.top, 4)
 
             // Module separator
             Spacer().frame(height: 20)
@@ -295,13 +242,11 @@ struct VocabularyTab: View {
                 snippets = SnippetStorage.load()
                 hotwords = HotwordStorage.load()
                 builtinSnippetCount = SnippetStorage.builtinCount()
-                builtinHotwordCount = HotwordStorage.builtinCount()
             }
         }
         .onAppear {
             hotwords = HotwordStorage.load()
             snippets = SnippetStorage.load()
-            builtinHotwordCount = HotwordStorage.builtinCount()
             builtinSnippetCount = SnippetStorage.builtinCount()
         }
         .sheet(isPresented: $showBulkHotwordsSheet) {
@@ -599,12 +544,13 @@ struct VocabularyTab: View {
             TextEditor(text: $bulkHotwordsText)
                 .font(.system(size: 13))
                 .foregroundStyle(TF.settingsText)
+                .scrollContentBackground(.hidden)
                 .padding(8)
                 .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsBg))
                 .frame(minHeight: 300, maxHeight: 400)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(TF.settingsTextTertiary.opacity(0.3), lineWidth: 1)
+                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
                 )
 
             // Stats
