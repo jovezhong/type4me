@@ -12,13 +12,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    static func tabs(for edition: AppEdition?) -> [SettingsTab] {
-        switch edition {
-        case .member:
-            return [.general, .modes, .vocabulary, .history, .about]
-        case .byoKey, .none:
-            return allCases.map { $0 }
-        }
+    static var visibleTabs: [SettingsTab] {
+        allCases
     }
 
     var displayName: String {
@@ -51,11 +46,6 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var selectedTab: SettingsTab = .general
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
-    @AppStorage("tf_app_edition") private var editionRaw: String?
-
-    private var edition: AppEdition? {
-        editionRaw.flatMap { AppEdition(rawValue: $0) }
-    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -67,16 +57,6 @@ struct SettingsView: View {
         .frame(minWidth: 700, minHeight: 480)
         .background(TF.settingsBg)
         .preferredColorScheme(.light)
-        .onAppear {
-            if selectedTab == .models && edition == .member {
-                selectedTab = .general
-            }
-        }
-        .onChange(of: editionRaw) { _, _ in
-            if selectedTab == .models && edition == .member {
-                selectedTab = .general
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToMode)) { note in
             selectedTab = .modes
             if let modeId = note.object as? UUID {
@@ -105,18 +85,13 @@ struct SettingsView: View {
 
             // Nav items
             VStack(spacing: 2) {
-                ForEach(SettingsTab.tabs(for: edition)) { tab in
+                ForEach(SettingsTab.visibleTabs) { tab in
                     navItem(tab)
                 }
             }
             .padding(.horizontal, 10)
 
             Spacer()
-
-            // Bottom: edition card
-            SidebarEditionCard()
-                .padding(.horizontal, 10)
-                .padding(.bottom, 12)
         }
         .frame(width: 180)
         .background(TF.settingsBg)
@@ -164,9 +139,7 @@ struct SettingsView: View {
     private var content: some View {
         ZStack {
             tabPage(.general)    { GeneralSettingsTab() }
-            if edition != .member {
-                tabPage(.models) { ModelSettingsTab() }
-            }
+            tabPage(.models)     { ModelSettingsTab() }
             tabPage(.vocabulary) { VocabularyTab() }
             tabPage(.modes)      { ModesSettingsTab() }
             fixedPage(.history)  { HistoryTab(isActive: selectedTab == .history) }

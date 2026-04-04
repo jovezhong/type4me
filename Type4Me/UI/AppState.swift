@@ -320,11 +320,6 @@ final class AppState {
         set { UserDefaults.standard.set(newValue, forKey: "tf_hasCompletedSetup") }
     }
 
-    /// Read-only; use AppEditionMigration.switchTo() to change edition.
-    var appEdition: AppEdition? {
-        AppEditionMigration.current
-    }
-
     init() {
         let modes = ModeStorage().load()
         availableModes = modes
