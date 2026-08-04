@@ -357,8 +357,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                 }
             )
             let savedVal = savedASRValues[field.key] ?? ""
-            let placeholder = savedVal.isEmpty ? field.placeholder : maskedSecret(savedVal)
-            settingsSecureField(field.label, text: binding, prompt: placeholder)
+            settingsSecureField(
+                field.label,
+                text: binding,
+                prompt: secureFieldPlaceholder(field: field, savedValue: savedVal)
+            )
         } else {
             let binding = Binding<String>(
                 get: {
@@ -375,6 +378,19 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             )
             settingsField(field.label, text: binding, prompt: field.placeholder)
         }
+    }
+
+    private var deepgramUsesOfficialEndpoint: Bool {
+        let endpoint = effectiveASRValues["baseURL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return endpoint?.isEmpty == false ? endpoint == DeepgramASRConfig.defaultBaseURL : true
+    }
+
+    private func secureFieldPlaceholder(field: CredentialField, savedValue: String) -> String {
+        if field.key == "apiKey", selectedASRProvider == .deepgram,
+           !deepgramUsesOfficialEndpoint {
+            return L("API 密钥或令牌", "API key or token")
+        }
+        return savedValue.isEmpty ? field.placeholder : maskedSecret(savedValue)
     }
 
     private var asrSummaryRows: [(String, String)] {
